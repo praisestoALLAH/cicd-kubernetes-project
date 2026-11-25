@@ -1,0 +1,128 @@
+# CD pipeline (Continuous Delivery/Deployment)
+# Purpose: turn an approved merge into 'main' into a running release in Kubernetes.
+# Flow: ci (gate) -> publish (push image to GHCR) -> deploy (kubectl on self-hosted runner)
+# Each job uses 'needs:' so a failure anywhere stops everything after it.
+
+name: CD
+
+on:
+  push:
+    branches: [main]       # i.e. an approved PR was merged into main
+    paths-ignore:          # documentation-only merges do not need a new release
+      - 'docs/**'
+      - '**.md'
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: cd-main
+  cancel-in-progress: false
+
+jobs:
+  ci:
+    name: Validate (reuses CI)
+    uses: ./.github/workflows/ci.yml
+
+  publish:
+    name: Publish versioned image to GHCR
+    needs: ci              # publish ONLY if CI passed
+    runs-on: ubuntu-latest
+    outputs:
+      image: ${{ steps.meta.outputs.image }}
+      version: ${{ steps.meta.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compute image name and tag
+        id: meta
+        run: |
+          VERSION="v$(cat VERSION)"
+          REPO="ghcr.io/$(echo '${{ github.repository }}' | tr '[:upper:]' '[:lower:]')"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "repo=$REPO" >> "$GITHUB_OUTPUT"
+          echo "image=$REPO:$VERSION" >> "$GITHUB_OUTPUT"
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Enforce immutable tags (refuse to overwrite a release)
+        run: |
+          if docker manifest inspect "${{ steps.meta.outputs.image }}" >/dev/null 2>&1; then
+            echo "::error::${{ steps.meta.outputs.image }} already exists. Bump the VERSION file."
+            exit 1
+          fi
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          build-args: |
+            APP_VERSION=${{ steps.meta.outputs.version }}
+            GIT_SHA=${{ github.sha }}
+          tags: |
+            ${{ steps.meta.outputs.image }}
+            ${{ steps.meta.outputs.repo }}:sha-${{ github.sha }}
+
+  deploy:
+    name: Deploy to Kubernetes
+    needs: publish
+    runs-on: self-hosted   # your laptop, which can reach the local kind cluster
+    environment: production
+    defaults:
+      run:
+        shell: bash
+    env:
+      IMAGE: ${{ needs.publish.outputs.image }}
+      VERSION: ${{ needs.publish.outputs.version }}
+      NS: campus-pulse
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Apply configuration
+        env:
+          APP_API_KEY: ${{ secrets.APP_API_KEY }}
+        run: |
+          kubectl apply -f k8s/namespace.yaml
+          # Secret is created from a protected CI secret - never from git
+          kubectl -n "$NS" create secret generic campus-pulse-secret \
+            --from-literal=API_KEY="$APP_API_KEY" \
+            --dry-run=client -o yaml | kubectl apply -f -
+          kubectl apply -f k8s/configmap.yaml -f k8s/service.yaml
+
+      - name: Roll out new image
+        run: |
+          sed "s|IMAGE_PLACEHOLDER|$IMAGE|" k8s/deployment.yaml | kubectl apply -f -
+          kubectl -n "$NS" annotate deployment/campus-pulse \
+            kubernetes.io/change-cause="CD run ${{ github.run_number }}: $VERSION" --overwrite
+
+      - name: Wait for rollout
+        run: kubectl -n "$NS" rollout status deployment/campus-pulse --timeout=120s
+
+      - name: Verify the live app reports the new version
+        run: |
+          kubectl -n "$NS" port-forward svc/campus-pulse 18080:80 >/dev/null 2>&1 &
+          PF=$!
+          trap 'kill $PF' EXIT
+          sleep 4
+          ACTUAL=$(curl -fsS http://localhost:18080/version | python3 -c "import sys,json;print(json.load(sys.stdin)['version'])")
+          echo "Expected $VERSION, running $ACTUAL"
+          test "$ACTUAL" = "$VERSION"
+
+      - name: Roll back automatically on failure
+        if: failure()
+        run: kubectl -n "$NS" rollout undo deployment/campus-pulse || true
+
+      - name: Report result
+        if: always()
+        run: |
+          {
+            echo "## Deployment ${{ job.status }}"
+            echo "- Image: \`$IMAGE\`"
+            echo "- Commit: \`${{ github.sha }}\`"
+            echo '```'
+            kubectl -n "$NS" get pods -o wide || true
+            kubectl -n "$NS" rollout history deployment/campus-pulse || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

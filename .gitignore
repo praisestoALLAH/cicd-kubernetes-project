@@ -1,0 +1,9 @@
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+# NEVER commit real secrets
+k8s/secret.yaml
+.env
+*.kubeconfig
+kubeconfig*

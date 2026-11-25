@@ -1,0 +1,9 @@
+# Local cluster: 1 control-plane + 1 worker; maps host:8080 -> NodePort 30080
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+nodes:
+  - role: control-plane
+    extraPortMappings:
+      - containerPort: 30080
+        hostPort: 8080
+  - role: worker

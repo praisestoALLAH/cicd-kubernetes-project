@@ -1,0 +1,9 @@
+# Non-sensitive configuration
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: campus-pulse-config
+  namespace: campus-pulse
+data:
+  APP_ENV: "kubernetes-kind"
+  GREETING: "Hello from Campus Pulse on Kubernetes"

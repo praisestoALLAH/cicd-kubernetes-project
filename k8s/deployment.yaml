@@ -1,0 +1,57 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: campus-pulse
+  namespace: campus-pulse
+  labels:
+    app: campus-pulse
+spec:
+  replicas: 2
+  revisionHistoryLimit: 5          # keeps old ReplicaSets so rollbacks work
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1                  # at most 1 extra pod during update
+      maxUnavailable: 0            # never drop below desired capacity
+  selector:
+    matchLabels:
+      app: campus-pulse
+  template:
+    metadata:
+      labels:
+        app: campus-pulse
+    spec:
+      securityContext:
+        runAsNonRoot: true
+      containers:
+        - name: app
+          # IMAGE_PLACEHOLDER is replaced by the CD pipeline with the exact
+          # immutable tag, e.g. ghcr.io/you/repo:v1.1.0
+          image: IMAGE_PLACEHOLDER
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8000
+          envFrom:
+            - configMapRef:
+                name: campus-pulse-config
+          env:
+            - name: API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: campus-pulse-secret
+                  key: API_KEY
+          readinessProbe:          # "may I receive traffic?"
+            httpGet: {path: /health, port: http}
+            initialDelaySeconds: 3
+            periodSeconds: 5
+          livenessProbe:           # "am I alive, or should I be restarted?"
+            httpGet: {path: /health, port: http}
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            failureThreshold: 3
+          resources:
+            requests: {cpu: 50m, memory: 64Mi}
+            limits: {cpu: 250m, memory: 128Mi}
+          securityContext:
+            allowPrivilegeEscalation: false

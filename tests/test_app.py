@@ -62,3 +62,10 @@ def test_write_requires_api_key_when_configured():
     assert secured.post("/tasks", json={"title": "x"}).status_code == 401
     ok = secured.post("/tasks", json={"title": "x"}, headers={"X-API-Key": "s3cret"})
     assert ok.status_code == 201
+
+
+def test_stats_with_tasks(client):
+    """Stats reflect created and completed tasks."""
+    task_id = client.post("/tasks", json={"title": "a"}).get_json()["id"]
+    client.put(f"/tasks/{task_id}/done")
+    assert client.get("/stats").get_json() == {"total": 1, "done": 1, "completion_rate": 100.0}

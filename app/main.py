@@ -128,6 +128,13 @@ def create_app(api_key=None):
             return jsonify(error="task not found"), 404
         return "", 204
 
+    @app.get("/stats")
+    def stats():
+        """Totals and completion percentage for all tasks."""
+        total = len(tasks)
+        done = sum(1 for t in tasks.values() if t["done"])
+        return jsonify(total=total, done=done, completion_rate=round(done / total * 100, 1))
+
     return app
 
 

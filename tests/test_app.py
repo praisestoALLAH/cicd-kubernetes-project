@@ -69,3 +69,10 @@ def test_stats_with_tasks(client):
     task_id = client.post("/tasks", json={"title": "a"}).get_json()["id"]
     client.put(f"/tasks/{task_id}/done")
     assert client.get("/stats").get_json() == {"total": 1, "done": 1, "completion_rate": 100.0}
+
+
+def test_stats_with_no_tasks(client):
+    """Regression test: /stats must not crash when there are no tasks."""
+    resp = client.get("/stats")
+    assert resp.status_code == 200
+    assert resp.get_json()["completion_rate"] == 0.0

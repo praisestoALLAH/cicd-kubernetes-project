@@ -133,7 +133,9 @@ def create_app(api_key=None):
         """Totals and completion percentage for all tasks."""
         total = len(tasks)
         done = sum(1 for t in tasks.values() if t["done"])
-        return jsonify(total=total, done=done, completion_rate=round(done / total * 100, 1))
+        # Avoid dividing by zero when there are no tasks yet
+        rate = round(done / total * 100, 1) if total else 0.0
+        return jsonify(total=total, done=done, completion_rate=rate)
 
     return app
 
